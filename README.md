@@ -1,2 +1,16 @@
-# city_future
-This program will estimate load of transport system
+# City load estimator
+Данная программа предназначена для расчета нагрузки на сеть общественного транспорта на территории города.
+
+Внешние зависимости:
+1. GDAL
+2. igraph
+3. MLPACK
+
+Инструмент предназначен для использования на UNIX-подобных системах
+
+Сборка осуществляется при помощи Cmake, протестированы компилятор Apple Clang и GCC.
+
+Для сборки введите в терминале:
+mkdir build && cd build
+cmake ..
+make
