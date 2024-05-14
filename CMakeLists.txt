@@ -4,7 +4,7 @@ set(CMAKE_CXX_STANDARD 20 CACHE STRING "C++ version selection")
 
 project(city_load)
 
-set(SOURCE_FL main.cpp io.cpp data_preparation.cpp classifications.cpp gtfs_data.cpp)
+set(SOURCE_FL main.cpp io.cpp data_preparation.cpp classifications.cpp gtfs_data.cpp ptmodel.cpp)
 
 add_definitions(-w)
 

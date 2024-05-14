@@ -39,6 +39,10 @@ namespace cl {
             void estimate_workforce(std::unique_ptr<io::Genplan_data>& gendata);
             void density_map(std::string fishnet_path, OGRSpatialReference srs_d, int sq_size_len);
     };
+
+    std::vector<std::tuple<std::string, OGRPolygon>> extended_areas(std::string pathext, OGRSpatialReference osrs_d);
+    void make_empty_buildings(std::unique_ptr<cl::Cl_bild>& classificated, std::unique_ptr<io::Genplan_data>& gendata,
+                                std::string pathfrom, std::string pathto, OGRSpatialReference osrs_d, std::unique_ptr<io::Genplan_data>& gendata2);
 }
 
 #endif

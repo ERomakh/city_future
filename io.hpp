@@ -34,6 +34,7 @@ namespace io {
 
             void download_data(std::string pathname);
             void make_array();
+            void save_data(std::string bsavepath, OGRSpatialReference srs_d);
 
     };
 
@@ -49,8 +50,10 @@ namespace io {
             OGRSpatialReference osrs_spatref;
 
             void download_data(std::string pathname);
+            void clear_roads(std::unique_ptr<Osm_roads>& clear_roads);
             void spindex_grid();
             void make_array();
+            void save_data(std::string rsavepath, OGRSpatialReference srs_d);
     };
 
     class Osm_amenities {

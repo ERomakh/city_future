@@ -82,6 +82,38 @@ std::unordered_map<int, int> gtfs::GTFS_lines::plain_routes(std::string path_rou
 
     std::filesystem::path route_path = path_routes;
     std::string text_line;
+    std::string first_line;
+
+    std::ifstream text_file_open;
+    long rt_index;
+    long route_id_index;
+    if (route_path.stem() == "routes" && route_path.extension() == ".txt"){
+        text_file_open.open(route_path);
+        while(std::getline(text_file_open, first_line)){
+            try{
+                v_string fline_names = split_string(first_line, std::string(","));
+                std::string route_type_d = "route_type";
+                std::string route_id_d = "route_id";
+                if (std::find(fline_names.begin(), fline_names.end(), route_type_d) != fline_names.end()){
+                    for (int i = 0; i < fline_names.size(); i++){
+                        if (fline_names.at(i) == route_type_d){
+                            rt_index = i;
+                        } else if (fline_names.at(i) == route_id_d){
+                            route_id_index = i;
+                        }
+                    }
+                    break;
+                }
+            } catch (...){
+
+            }
+                
+        }
+        text_file_open.close();
+    }
+
+
+
     std::ifstream text_file;
     if (route_path.stem() == "routes" && route_path.extension() == ".txt"){
         text_file.open(route_path);
@@ -91,8 +123,8 @@ std::unordered_map<int, int> gtfs::GTFS_lines::plain_routes(std::string path_rou
 
                 try {
 
-                    int route_type = std::stoi(tline.at(0));
-                    int route_id = std::stoi(tline.at(4));
+                    int route_type = std::stoi(tline.at(0)); // 0
+                    int route_id = std::stoi(tline.at(4)); // 4
 
                     plain_data.emplace(route_id, route_type);
                 } catch (...){
@@ -117,6 +149,8 @@ std::vector<std::tuple<int, std::string, std::string>> gtfs::GTFS_lines::trip_lo
     std::filesystem::path route_path = path_routes;
     std::string text_line;
     std::vector<std::string> parameters_string;
+
+
     std::ifstream text_file;
     if (route_path.stem() == "trips" && route_path.extension() == ".txt"){
         text_file.open(route_path);
@@ -314,8 +348,8 @@ std::unordered_map<std::string, v_int> gtfs::GTFS_lines::stop_connections(std::s
 
         std::map<int, int, std::less<int>> innermap;
 
-        for (ssize_t i = 0; i != unique_id.size(); i++){
-            if (unique_id.at(i) == tripid){
+        for (ssize_t i = 0; i != tripid_vec.size(); i++){
+            if (tripid_vec.at(i) == tripid){ // ?!
                 innermap.try_emplace(stop_position_vec.at(i), stop_id_vec.at(i));
             }
         }
@@ -413,7 +447,7 @@ void gtfs::GTFS_lines::save_prev_lines(std::string savepath, OGRSpatialReference
     OGRLayer *feature_layer;
     feature_layer = dataset->CreateLayer("outpoint", &srs_d, wkbLineString, NULL);
 
-    OGRFieldDefn type_field("Transport", OFTInteger);
+    OGRFieldDefn type_field("TripId", OFTString);
 
     feature_layer->CreateField(&type_field);
 
@@ -422,7 +456,7 @@ void gtfs::GTFS_lines::save_prev_lines(std::string savepath, OGRSpatialReference
     for (ssize_t i = 0; i < route_geometry.size(); i++){
         OGRFeature *linestr_feature;
         linestr_feature = OGRFeature::CreateFeature(feature_layer->GetLayerDefn());
-        linestr_feature->SetField("Transport", type_of_transport.at(i));
+        linestr_feature->SetField("TripId", trip_id_vec.at(i).data());
 
         linestr_feature->SetGeometry(&route_geometry.at(i));
         feature_layer->CreateFeature(linestr_feature);
@@ -448,7 +482,7 @@ void gtfs::GTFS_points::save_prev_points(std::string savepath, OGRSpatialReferen
     OGRLayer *feature_layer;
     feature_layer = dataset->CreateLayer("outpoint", &srs_d, wkbPoint, NULL);
 
-    OGRFieldDefn iddata("TypeId", OFTInteger);
+    OGRFieldDefn iddata("StopID", OFTInteger);
 
     feature_layer->CreateField(&iddata);
 
@@ -457,11 +491,156 @@ void gtfs::GTFS_points::save_prev_points(std::string savepath, OGRSpatialReferen
     for (ssize_t i = 0; i < stop_coord.size(); i++){
         OGRFeature *linestr_feature;
         linestr_feature = OGRFeature::CreateFeature(feature_layer->GetLayerDefn());
-        linestr_feature->SetField("Transport", stop_id_vec.at(i));
+        linestr_feature->SetField("StopID", stop_id_vec.at(i));
 
         linestr_feature->SetGeometry(&stop_coord.at(i));
         feature_layer->CreateFeature(linestr_feature);
         OGRFeature::DestroyFeature(linestr_feature);
     }
     GDALClose(dataset);
+}
+
+
+void gtfs::GTFS_points::get_metro_stations(std::string metro_path_st, OGRSpatialReference osrs){
+
+    GDALDatasetUniquePtr gdal_data(GDALDataset::Open(metro_path_st.data(), GDAL_OF_VECTOR, NULL, NULL, NULL));
+    if (gdal_data != nullptr){
+        OGRLayer *point_layer;
+        point_layer = gdal_data->GetLayer(0);
+        for (const auto& point_feature:*point_layer){
+            v_string lineid_data;
+            for(const auto& field_data: *point_feature){
+                std::string fname = field_data.GetName();
+                if (fname == "pointid"){
+                    stop_id_vec.push_back(field_data.GetAsInteger64());
+                } else if (fname == "dir"){
+                    lineid_data.push_back(field_data.GetAsString());
+                }
+            }
+            OGRGeometry *general_geometry = point_feature->StealGeometry();
+            if (general_geometry != nullptr && general_geometry->getGeometryType() == wkbPoint){
+                OGRPoint point_geom;
+                point_geom = *general_geometry->toPoint();
+                point_geom.transformTo(&osrs);
+                stop_coord.push_back(point_geom);
+            } else if (general_geometry != nullptr && general_geometry->getGeometryType() == wkbMultiPoint){
+                OGRMultiPoint ogrmultipoint_s = *general_geometry->toMultiPoint();
+                for (auto single_point:ogrmultipoint_s){
+                    single_point->transformTo(&osrs);
+                    stop_coord.push_back(*single_point);
+                }
+            }
+        }
+    } else {
+        std::cout << "Такого шейпфайла нет. Проверь путь до шейпа" << std::endl;
+    }
+}
+
+
+void gtfs::GTFS_lines::get_metro_lines(std::string metro_path_lines, OGRSpatialReference osrs){
+
+    GDALDatasetUniquePtr gdal_data(GDALDataset::Open(metro_path_lines.data(), GDAL_OF_VECTOR, NULL, NULL, NULL));
+    if (gdal_data != nullptr){
+        OGRLayer *line_layer;
+        line_layer = gdal_data->GetLayer(0);
+        for (const auto& line_feature:*line_layer){
+            v_int lineid_data;
+            for(const auto& field_data: *line_feature){
+                std::string fname = field_data.GetName();
+                if (fname == "lineid"){
+                    route_id_vec.push_back(field_data.GetAsInteger());
+                } else if (fname == "tr_type"){
+                    type_of_transport.push_back(field_data.GetAsInteger());
+                } else if (fname == "frequency"){
+                    time_head_vec.push_back(field_data.GetAsDouble());
+                } else if (fname == "direction"){
+                    trip_vec.push_back(field_data.GetAsString());
+                }
+            }
+            OGRGeometry *general_type = line_feature->StealGeometry();
+            if (general_type != nullptr && general_type->getGeometryType() == wkbMultiLineString){
+                OGRMultiLineString roads_mp = *general_type->toMultiLineString();
+                for (auto rmp:roads_mp){
+                    rmp->transformTo(&osrs);
+                    route_geometry.push_back(*rmp);
+                }
+            } else if (general_type != nullptr && general_type->getGeometryType() == wkbLineString){
+                OGRLineString roads_mp = *general_type->toLineString();
+                roads_mp.transformTo(&osrs);
+                route_geometry.push_back(roads_mp);
+                }
+        }
+    } else {
+        std::cout << "Такого шейпфайла нет. Проверь путь до шейпа" << std::endl;
+    }
+}
+
+
+void gtfs::GTFS_points::make_connection(){
+    
+    for (int i = 0; i < stop_coord.size(); i++){
+        id_connect.try_emplace(stop_id_vec.at(i), stop_coord.at(i));
+    }
+}
+
+void gtfs::GTFS_lines::connect_stations(std::unique_ptr<GTFS_points>& stations){
+
+    for (int i = 0; i < route_geometry.size(); i++){
+        if (type_of_transport.at(i) == -1){
+            v_int rgeom_metro;
+            for (OGRPoint mpoint:route_geometry.at(i)){
+                OGRGeometry* buffer_1 = NULL;
+                buffer_1 = mpoint.Buffer(3);
+                for (int j = 0; j < stations->stop_coord.size(); j++){
+                    if (buffer_1->Intersects(&stations->stop_coord.at(j))){
+                        rgeom_metro.push_back(stations->stop_id_vec.at(j));
+                    }
+                }
+                delete buffer_1;
+            }
+            stops_in_routes.push_back(rgeom_metro);
+        }
+    }
+}
+
+
+void gtfs::GTFS_lines::calculate_capacity(){
+
+    for (int i = 0; i < time_head_vec.size(); i++){
+        if (type_of_transport.at(i) == 3){
+
+            double cap = (static_cast<double>(3600) / static_cast<double>(time_head_vec.at(i))) * static_cast<double>(3) * static_cast<double>(112);
+            transport_capacity.push_back(cap);
+
+        } else if (type_of_transport.at(i) == 0){
+
+            double cap = (static_cast<double>(3600) / static_cast<double>(time_head_vec.at(i))) * static_cast<double>(3) * static_cast<double>(162);
+            transport_capacity.push_back(cap);
+
+        } else if (type_of_transport.at(i) == 4){
+            double cap = (static_cast<double>(3600) / static_cast<double>(time_head_vec.at(i))) * static_cast<double>(3) * static_cast<double>(1320);
+            transport_capacity.push_back(cap);
+        }
+    }
+}
+
+
+void gtfs::GTFS_lines::stop_capacity(std::unique_ptr<GTFS_points>& stops){
+
+    for (int stopid:stops->stop_id_vec){
+        stops->total_capacity.emplace(stopid, static_cast<double>(0));
+    }
+
+    std::cout << "stops_in_routes: " << stops_in_routes.size() << std::endl;
+    std::cout << "transport_capacity: " << transport_capacity.size() << std::endl;
+
+    for (int stopid:stops->stop_id_vec){
+        for (int strt = 0; strt < stops_in_routes.size(); strt++){
+            if (std::find(stops_in_routes.at(strt).begin(), stops_in_routes.at(strt).end(), stopid) != stops_in_routes.at(strt).end()){
+                if (stops->total_capacity.contains(stopid)){
+                    stops->total_capacity.at(stopid) += transport_capacity.at(strt);
+                }
+            }
+        }
+    }
 }

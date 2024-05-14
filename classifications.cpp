@@ -12,6 +12,8 @@
 #include <chrono>
 #include <numeric>
 #include <thread>
+#include <unordered_set>
+#include <random>
 
 #include <mlpack.hpp>
 
@@ -798,4 +800,377 @@ void cl::Cl_bild::density_map(std::string fishnet_path, OGRSpatialReference srs_
         OGRFeature::DestroyFeature(polygon_feature);
     }
     GDALClose(dataset);
+}
+
+
+std::vector<std::tuple<std::string, OGRPolygon>> cl::extended_areas(std::string pathext, OGRSpatialReference osrs_d){
+    GDALAllRegister();
+
+    std::vector<std::tuple<std::string, OGRPolygon>> polygons_data;
+    v_string genplan_type;
+    std::vector<OGRPolygon> ogrpolygons;
+
+    GDALDatasetUniquePtr gdal_data(GDALDataset::Open(pathext.data(), GDAL_OF_VECTOR, NULL, NULL, NULL));
+    if (gdal_data != nullptr){
+
+        OGRLayer *point_layer;
+        point_layer = gdal_data->GetLayer(0);
+
+        for (const auto& point_feature:*point_layer){
+
+            for(const auto& field_data: *point_feature){
+
+                std::string fname = field_data.GetName();
+                if (fname == "gentype"){
+                    genplan_type.push_back(field_data.GetAsString());
+                } else {}
+            }
+
+            OGRGeometry *general_geometry = point_feature->StealGeometry();
+            if (general_geometry != nullptr && general_geometry->getGeometryType() == wkbPolygon){
+                OGRPolygon poly_geom;
+                poly_geom = *general_geometry->toPolygon();
+                poly_geom.transformTo(&osrs_d);
+                ogrpolygons.push_back(poly_geom);
+            } else if (general_geometry != nullptr && general_geometry->getGeometryType() == wkbMultiPolygon){
+                OGRMultiPolygon ogrmultipoint_s = *general_geometry->toMultiPolygon();
+                for (auto single_point:ogrmultipoint_s){
+                    single_point->transformTo(&osrs_d);
+                    ogrpolygons.push_back(*single_point);
+                }
+            }
+
+            // OGRGeometry *general_geometry = point_feature->StealGeometry();
+            // if (general_geometry != nullptr){
+            //     OGRPolygon *poly_geom = new OGRPolygon;
+            //     poly_geom = general_geometry->toPolygon();
+            //     poly_geom->transformTo(&osrs_d);
+            //     ogrpolygons.push_back(*poly_geom);
+            //     delete poly_geom;
+            // }
+        }
+    } else {
+        std::cout << "Такого шейпфайла нет. Проверь путь до шейпа" << std::endl;
+    }
+
+    for (int i = 0; i < ogrpolygons.size(); i++){
+        std::tuple<std::string, OGRPolygon> polytup = std::make_tuple(genplan_type.at(i), ogrpolygons.at(i));
+        polygons_data.push_back(polytup);
+    }
+
+    return polygons_data;
+}
+
+
+void cl::make_empty_buildings(std::unique_ptr<cl::Cl_bild>& classificated, std::unique_ptr<io::Genplan_data>& gendata,
+                                std::string pathfrom, std::string pathto, OGRSpatialReference osrs_d, std::unique_ptr<io::Genplan_data>& gendata2){
+    
+    std::cout << "make_empty_buildings start" << std::endl;
+
+    std::vector<std::tuple<std::string, OGRPolygon>> already_builded = extended_areas(pathfrom, osrs_d);
+    std::vector<std::tuple<std::string, OGRPolygon>> empty_poly = extended_areas(pathto, osrs_d);
+
+    v_doub standard_area;
+    std::vector<OGRPolygon> existed_polygons;
+
+    std::unordered_set<std::string> usetstring;
+    for (auto tuplecateg:already_builded){
+        usetstring.insert(std::get<0>(tuplecateg));
+    }
+
+    v_string gencateg_buildcateg;
+    v_doub gencateg_levels;
+    v_doub gencateg_area;
+
+    v_doub total_area_vec;
+
+    for (auto gencat:already_builded){
+        double curarea = std::get<1>(gencat).get_Area();
+        total_area_vec.push_back(curarea);
+    }
+
+    double total_area = std::reduce(total_area_vec.begin(), total_area_vec.end());
+
+    // Information about from category
+
+    for (auto gencat:already_builded){
+        for (int i = 0; i < classificated->point_vector.size(); i++){
+            if (std::get<1>(gencat).Intersects(&classificated->point_vector.at(i))){
+                gencateg_buildcateg.push_back(classificated->category.at(i));
+                gencateg_levels.push_back(classificated->levels.at(i));
+                gencateg_area.push_back(classificated->area.at(i));
+            }
+        }
+    }
+
+    double norm_density = total_area / static_cast<double>(gencateg_buildcateg.size());
+
+    v_doub total_predicted_area;
+
+    for (auto empty_cat:empty_poly){
+        double curemptyarea = std::get<1>(empty_cat).get_Area();
+        total_predicted_area.push_back(curemptyarea);
+    }
+
+    double predarea = std::reduce(total_predicted_area.begin(), total_predicted_area.end());
+    int buildings_number = predarea / norm_density;
+
+    std::vector<std::tuple<OGRPolygon, int, OGREnvelope>> buildings_2; // number of points in new territories
+
+    // Number of houses in new territories
+
+    for (auto empty_cat:empty_poly){
+        double curemptyarea = std::get<1>(empty_cat).get_Area();
+        OGREnvelope envel;
+        std::get<1>(empty_cat).getEnvelope(&envel);
+        int num_of_bds = curemptyarea / predarea * buildings_number;
+        std::tuple<OGRPolygon, int, OGREnvelope> predtup = std::make_tuple(std::get<1>(empty_cat), num_of_bds, envel);
+        buildings_2.push_back(predtup);
+    }
+
+    // Unique categories
+
+    std::unordered_set<std::string> unique_categ;
+    std::unordered_map<std::string, double> categ_percentage;
+
+    for (std::string gbg:gencateg_buildcateg){
+        unique_categ.insert(gbg);
+    }
+
+    // Average buildings in category
+
+    std::vector<std::tuple<std::string, double, double>> average_bycateg; // categ, levels, area
+    for (std::string incateg:unique_categ){
+
+        v_doub categ_levels;
+        v_doub categ_area;
+
+        for (int j = 0; j < gencateg_buildcateg.size(); j++){
+            if (gencateg_buildcateg.at(j) == incateg){
+                categ_levels.push_back(gencateg_levels.at(j));
+                categ_area.push_back(gencateg_area.at(j));
+            }
+        }
+
+        double average_levels = std::reduce(categ_levels.begin(), categ_levels.end()) / static_cast<double>(categ_levels.size());
+        double average_area = std::reduce(categ_area.begin(), categ_area.end()) / static_cast<double>(categ_area.size());
+
+        std::tuple<std::string, double, double> local_av = std::make_tuple(incateg, average_levels, average_area);
+        average_bycateg.push_back(local_av);
+    }
+
+    // Percentage of each category
+    for (std::string ucateg:unique_categ){
+        int counted = std::count(gencateg_buildcateg.begin(), gencateg_buildcateg.end(), ucateg);
+        double percentage = static_cast<double>(counted) / static_cast<double>(gencateg_buildcateg.size());
+        categ_percentage.emplace(ucateg, percentage);
+    }
+
+    std::vector<std::tuple<OGRPoint, std::string, double, double>> insiderpoly; // geom, categ, levels, area
+    std::vector<std::vector<OGRPoint>> empty_points;
+
+    // Make points inside new territiries
+
+    std::random_device rd;
+    std::mt19937 rng(rd());
+
+    for (auto ogrbn:buildings_2){
+        
+        std::uniform_int_distribution<int> x_uni(std::get<2>(ogrbn).MinX, std::get<2>(ogrbn).MaxX); // min / max Xcoord
+        std::uniform_int_distribution<int> y_uni(std::get<2>(ogrbn).MinY, std::get<2>(ogrbn).MaxY); // min / max Ycoord
+        int numofbds = std::get<1>(ogrbn);
+        int currentnum = 0;
+
+        std::vector<OGRPoint> pointofstatic;
+
+        while (currentnum < numofbds){
+            OGRPoint random_build;
+            double xcoord = static_cast<double>(x_uni(rng));
+            double ycoord = static_cast<double>(y_uni(rng));
+            random_build.setX(xcoord);
+            random_build.setY(ycoord);
+            if (std::get<0>(ogrbn).Intersects(&random_build)){
+                pointofstatic.push_back(random_build);
+                currentnum++;
+            }
+        }
+        empty_points.push_back(pointofstatic);
+    }
+
+    // Insert attribute info
+    std::vector<std::vector<std::tuple<std::string, int, int>>> general_info;
+    for (int i = 0; i < buildings_2.size(); i++){
+        int analyzed_number = std::get<1>(buildings_2.at(i));
+        std::vector<std::tuple<std::string, int>> num_by_categ;
+        for (auto keyval:categ_percentage){
+            double categ_val = analyzed_number * keyval.second;
+            std::tuple<std::string, int> keystring = std::make_tuple(keyval.first, static_cast<int>(categ_val));
+            num_by_categ.push_back(keystring);
+        }
+
+        // ascending ordered nums
+        std::vector<std::tuple<std::string, int, int>> asc_categ;
+        for (int ct = 0; ct < num_by_categ.size(); ct++){
+            if (ct == 0){
+                std::tuple<std::string, int, int> ct_tup = std::make_tuple(std::get<0>(num_by_categ.at(ct)), 0, std::get<1>(num_by_categ.at(ct)));
+                asc_categ.push_back(ct_tup);
+            } else {
+                auto previous_tuple = asc_categ.at(ct - 1);
+                std::tuple<std::string, int, int> ct_tup = std::make_tuple(std::get<0>(num_by_categ.at(ct)), 
+                                                            std::get<2>(previous_tuple), std::get<1>(num_by_categ.at(ct)));
+                asc_categ.push_back(ct_tup);
+            }
+        }
+        general_info.push_back(asc_categ);
+
+    }
+
+    // insiderpoly
+    if (empty_points.size() == general_info.size()){
+
+        for (int ep = 0; ep < empty_points.size(); ep++){
+            auto vecinfo = general_info.at(ep);
+            std::vector<std::tuple<OGRPoint, std::string, double, double>> inside_categs;
+            for (int r = 0; r < empty_points.at(ep).size(); r++){
+                for (int ti = 0; ti < vecinfo.size(); ti++){
+                    if (ti < vecinfo.size() - 1){
+                        if ((r >= std::get<1>(vecinfo.at(ti))) && (r < std::get<2>(vecinfo.at(ti)))){ // average_bycateg
+                            for (auto abcat:average_bycateg){
+                                if (std::get<0>(vecinfo.at(ti)) == std::get<0>(abcat)){
+                                    std::tuple<OGRPoint, std::string, double, double> intuple;
+                                    intuple = std::make_tuple(empty_points.at(ep).at(r), std::get<0>(abcat), std::get<1>(abcat), std::get<2>(abcat));
+                                    insiderpoly.push_back(intuple);
+                                }
+                            }
+                            
+                        }
+                    }
+                    
+                }
+            }
+        }
+
+    } else {
+        std::cout << "Размеры категорий и созданных зданий не сошлись" << std::endl;
+    }
+
+
+    // genplan prepare
+
+    int population_change = gendata2->workforce_distrib.at("population") - gendata->workforce_distrib.at("population");
+    int factory_change = gendata2->workforce_distrib.at("factory_workers") - gendata->workforce_distrib.at("factory_workers");
+    int workforce_change = gendata2->workforce_distrib.at("total_workers") - gendata->workforce_distrib.at("total_workers") - factory_change;
+
+
+    // Estimate new population
+
+    double total_volume = static_cast<double>(0);
+    v_doub population_e;
+    population_e.assign(insiderpoly.size(), 0);
+
+    for (unsigned long i = 0; i != insiderpoly.size(); i++){
+        if (std::get<1>(insiderpoly.at(i)) == "office"){
+            double volume_b = (abs(std::get<2>(insiderpoly.at(i))) * abs(std::get<3>(insiderpoly.at(i)))) / static_cast<double>(5);
+            total_volume += volume_b;
+        } else if (std::get<1>(insiderpoly.at(i)) == "factory") {
+            double volume_b = static_cast<double>(0);
+            total_volume += volume_b;
+        } else {
+            double volume_b = abs(std::get<2>(insiderpoly.at(i))) * abs(std::get<3>(insiderpoly.at(i)));
+            total_volume += volume_b;
+        }
+        
+    }
+
+    for (unsigned long i = 0; i != insiderpoly.size(); i++){
+        if (std::get<1>(insiderpoly.at(i)) == "office"){
+            double volume_b = (abs(std::get<2>(insiderpoly.at(i))) * abs(std::get<3>(insiderpoly.at(i)))) / static_cast<double>(5);
+            double current_pop = abs((volume_b / total_volume) * static_cast<double>(population_change));
+            population_e.at(i) = current_pop;
+        } else if (std::get<1>(insiderpoly.at(i)) == "factory") {
+            double volume_b = static_cast<double>(0);
+            population_e.at(i) = volume_b;
+        } else {
+            double volume_b = (abs(std::get<2>(insiderpoly.at(i))) * abs(std::get<3>(insiderpoly.at(i))));
+            double current_pop = abs((volume_b / total_volume) * static_cast<double>(population_change));
+            population_e.at(i) = current_pop;
+        }
+    }
+
+    // Estimate new workforce
+
+    int factory_workers = factory_change / 2;
+    int total_workers = workforce_change / 2;
+
+    double total_work_volume = static_cast<double>(0);
+    double total_factory_volume = static_cast<double>(0);
+
+    v_doub workplaces_e;
+
+    for (unsigned long i = 0; i != insiderpoly.size(); i++){
+        if (std::get<1>(insiderpoly.at(i)) == "office"){
+            total_work_volume += (abs(std::get<3>(insiderpoly.at(i))) * abs(std::get<2>(insiderpoly.at(i))));
+        } else if (std::get<1>(insiderpoly.at(i)) == "high_build"){
+            total_work_volume += abs(std::get<3>(insiderpoly.at(i))) / static_cast<double>(4);
+        } else if (std::get<1>(insiderpoly.at(i)) == "med_build"){
+            total_work_volume += abs(std::get<3>(insiderpoly.at(i))) / static_cast<double>(4);
+        } else if (std::get<1>(insiderpoly.at(i)) == "factory"){
+            total_factory_volume += abs(std::get<3>(insiderpoly.at(i)));
+        } else if (std::get<1>(insiderpoly.at(i)) == "low_build"){
+            workplaces_e.at(i) = abs(((std::get<3>(insiderpoly.at(i)) / static_cast<double>(4)) / total_work_volume) * static_cast<double>(total_workers));
+        }
+    }
+
+    workplaces_e.assign(insiderpoly.size(), 0);
+
+    for (unsigned long i = 0; i != insiderpoly.size(); i++){
+
+        if (std::get<1>(insiderpoly.at(i)) == "office"){
+            workplaces_e.at(i) = abs(((std::get<3>(insiderpoly.at(i)) * std::get<2>(insiderpoly.at(i))) / total_work_volume) * static_cast<double>(total_workers));
+        } else if (std::get<1>(insiderpoly.at(i)) == "high_build"){
+            workplaces_e.at(i) = abs(((std::get<3>(insiderpoly.at(i)) / static_cast<double>(4)) / total_work_volume) * static_cast<double>(total_workers));
+        } else if (std::get<1>(insiderpoly.at(i)) == "med_build"){
+            workplaces_e.at(i) = abs(((std::get<3>(insiderpoly.at(i)) / static_cast<double>(4)) / total_work_volume) * static_cast<double>(total_workers));
+        } else if (std::get<1>(insiderpoly.at(i)) == "low_build"){
+            workplaces_e.at(i) = abs(((std::get<3>(insiderpoly.at(i)) / static_cast<double>(4)) / total_work_volume) * static_cast<double>(total_workers));
+        } else if (std::get<1>(insiderpoly.at(i)) == "factory"){
+            workplaces_e.at(i) = abs((std::get<3>(insiderpoly.at(i)) / total_factory_volume) * static_cast<double>(factory_workers));
+        } else {
+
+        }
+    }
+
+    int office_count = std::count(classificated->category.begin(), classificated->category.end(), std::string("office"));
+    double office_cahnge;
+
+    if (office_count > 0){
+        office_cahnge = static_cast<double>(total_workers) / static_cast<double>(office_count);
+    }
+    
+    int factory_count = std::count(classificated->category.begin(), classificated->category.end(), std::string("factory"));
+    double factory_cahnge;
+    
+    if (factory_count > 0){
+        factory_cahnge = static_cast<double>(factory_workers) / static_cast<double>(factory_count);
+    }
+
+    for (int j = 0; j < classificated->category.size(); j++){
+        if (classificated->category.at(j) == "office"){
+            if (!(isnan(office_cahnge))){
+                classificated->workplaces.at(j) += office_cahnge;
+            }    
+        }
+        if (classificated->category.at(j) == "factory"){
+            if (!(isnan(factory_cahnge))){
+                classificated->workplaces.at(j) += factory_cahnge;
+            }
+        }
+    }
+    // Add data to model
+    for (int i = 0; i != insiderpoly.size(); i++){
+        classificated->point_vector.push_back(std::get<0>(insiderpoly.at(i)));
+        classificated->population.push_back(population_e.at(i));
+        classificated->workplaces.push_back(workplaces_e.at(i));
+        classificated->category.push_back(std::get<1>(insiderpoly.at(i)));
+    }
 }

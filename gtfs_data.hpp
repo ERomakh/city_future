@@ -22,10 +22,14 @@ namespace gtfs {
         public:
             std::vector<OGRPoint> stop_coord;
             v_int stop_id_vec;
+            std::map<int, OGRPoint> id_connect;
             std::vector<v_int> routes_vec;
+            std::unordered_map<int, double> total_capacity; // stop id -> total possible passangers
 
             void download_gtfs(std::string path_stops, OGRSpatialReference spartef);
             void save_prev_points(std::string savepath, OGRSpatialReference srs_d);
+            void get_metro_stations(std::string metro_path_st, OGRSpatialReference osrs);
+            void make_connection();
     };
 
     class GTFS_lines{
@@ -37,9 +41,14 @@ namespace gtfs {
             v_string trip_vec;
             std::vector<v_int> stops_in_routes;
             std::vector<OGRLineString> route_geometry;
+            v_doub transport_capacity;
 
             void make_routes(std::unordered_map<std::string, std::string> gtfs_paths, OGRSpatialReference projected);
             void save_prev_lines(std::string savepath, OGRSpatialReference srs_d);
+            void get_metro_lines(std::string metro_path_lines, OGRSpatialReference osrs);
+            void connect_stations(std::unique_ptr<GTFS_points>& stations);
+            void calculate_capacity();
+            void stop_capacity(std::unique_ptr<GTFS_points>& stops);
 
         private:
             std::unordered_map<int, int> plain_routes(std::string path_routes);

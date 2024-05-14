@@ -540,3 +540,164 @@ void preparation::Buildings::simplify_categ(){
         }
     }
 }
+
+
+std::map<std::tuple<int, int>, std::tuple<std::tuple<int, int>, std::tuple<int, int>, double>> preparation::create_generalized_graph(std::unique_ptr<Roads>& topo_roads){
+
+    auto make_graph_indexes = [](std::unique_ptr<Roads>& rds){
+
+        std::map<std::tuple<int, int>, int> indicies;
+
+        std::vector<OGRPoint> allpoints_vector;
+        for (OGRLineString line:rds->ogr_linestr){
+            OGRPoint fpoint;
+            line.StartPoint(&fpoint);
+            allpoints_vector.push_back(fpoint);
+
+            OGRPoint lpoint;
+            line.EndPoint(&lpoint);
+            allpoints_vector.push_back(lpoint);
+        }
+
+        std::vector<OGRPoint> already_used;
+
+        int count_value = 0;
+        for (OGRLineString line:rds->ogr_linestr){
+
+            std::vector<OGRPoint> endpoints;
+            OGRPoint fpoint;
+            line.StartPoint(&fpoint);
+            endpoints.push_back(fpoint);
+
+            OGRPoint lpoint;
+            line.EndPoint(&lpoint);
+            endpoints.push_back(lpoint);
+
+            for (OGRPoint opoint:endpoints){
+                if (std::find(already_used.begin(), already_used.end(), opoint) == already_used.end()){
+
+                    OGRGeometry* buffer_1 = NULL;
+                    buffer_1 = opoint.Buffer(1);
+                    std::vector<OGRPoint> referenced_point;
+                    for (OGRPoint unused_point:allpoints_vector){
+                        if (buffer_1->Intersects(&unused_point)){
+                            referenced_point.push_back(unused_point);
+                        }
+                    }
+
+                    delete buffer_1;
+
+                    already_used.insert(already_used.end(), referenced_point.begin(), referenced_point.end());
+
+                    for (OGRPoint rp:referenced_point){
+                        std::tuple<int, int> point1 = std::make_tuple((int)round(rp.getX()), (int)round(rp.getY()));
+                        indicies.try_emplace(point1, count_value);
+                    }
+                    
+                    count_value++;
+                }
+                
+            }
+        }
+        return indicies;
+    };
+
+
+    auto graph_data = [](std::unique_ptr<Roads>& rds, std::map<std::tuple<int, int>, int>& point_index){
+        std::tuple<v_int, v_doub> idweghts_data;
+
+        std::map<std::tuple<int, int>, std::tuple<std::tuple<int, int>, std::tuple<int, int>, double>> car_edge_data;
+
+        v_int value_vec;
+        v_doub wdata;
+
+        for (OGRLineString ogrlin:rds->ogr_linestr){
+
+            OGRPoint fpoint;
+            ogrlin.StartPoint(&fpoint);
+            std::tuple<int, int> tuppoint1 = std::make_tuple((int)round(fpoint.getX()), (int)round(fpoint.getY()));
+
+            OGRPoint lpoint;
+            ogrlin.EndPoint(&lpoint);
+            std::tuple<int, int> tuppoint2 = std::make_tuple((int)round(lpoint.getX()), (int)round(lpoint.getY()));
+
+            if (point_index.at(tuppoint1) != point_index.at(tuppoint2)){
+                std::tuple<int, int> keys_data = std::make_tuple(point_index.at(tuppoint1), point_index.at(tuppoint2));
+                std::tuple<int, int> reverse_keys_data = std::make_tuple(point_index.at(tuppoint2), point_index.at(tuppoint1));
+                
+                double distance = ogrlin.get_Length() / static_cast<double>(24000);
+                std::tuple<std::tuple<int, int>, std::tuple<int, int>, double> value_data = std::make_tuple(tuppoint1, tuppoint2, distance);
+                car_edge_data.emplace(keys_data, value_data);
+                car_edge_data.emplace(reverse_keys_data, value_data);
+            }
+        }
+        
+        return car_edge_data;
+    };
+
+
+    std::map<std::tuple<int, int>, int> point_index = make_graph_indexes(topo_roads);
+    std::map<std::tuple<int, int>, std::tuple<std::tuple<int, int>, std::tuple<int, int>, double>> car_graph_data = graph_data(topo_roads, point_index);
+    return car_graph_data;
+}
+
+
+void preparation::Graph_view::save_graph_as_shp(std::string savepath, OGRSpatialReference spatref){
+    const char *driver_name = "ESRI Shapefile";
+    GDALDriver *gdal_driver;
+    gdal_driver = GetGDALDriverManager()->GetDriverByName(driver_name);
+    GDALDataset *dataset;
+    dataset = gdal_driver->Create(savepath.data(), 0, 0, 0,
+    GDT_Unknown, NULL);
+
+    if (dataset == NULL) {
+        std::cout << "Не получилось создать шейпфайл" << std::endl;
+        GDALClose(dataset);
+        return;
+    }
+
+    OGRLayer *feature_layer;
+    feature_layer = dataset->CreateLayer("outpoint", &spatref, wkbLineString, NULL);
+
+    OGRFieldDefn graph_weights_field("Weights", OFTReal);
+
+    feature_layer->CreateField(&graph_weights_field);
+
+    char* recode(int nEncoding = 0);
+    
+    for (ssize_t i = 0; i < gen_line_vec.size(); i++){
+        OGRFeature *line_feature;
+        line_feature = OGRFeature::CreateFeature(feature_layer->GetLayerDefn());
+        line_feature->SetField("Weights", graph_weights.at(i));
+
+        line_feature->SetGeometry(&gen_line_vec.at(i));
+        feature_layer->CreateFeature(line_feature);
+        OGRFeature::DestroyFeature(line_feature);
+    }
+    GDALClose(dataset);
+}
+
+
+void preparation::timer_exp(std::vector<long>& processed, ssize_t& all_things){
+
+    int barWidth = 100;
+    float progress = 0.0;
+
+    std::cout << "Поиск кратчайших путей на автомобильном графе" << " | " << io::get_unix_time() << std::endl;
+    
+    bool time_var = true;
+    while (time_var){
+        long already_processed = std::accumulate(processed.begin(), processed.end(), 0);
+        if (already_processed < all_things){
+            progress = static_cast<float>(already_processed) / static_cast<float>(all_things);
+            int pos = barWidth * progress;
+            std::cout << "Поиск доступных рабочих мест на автомобиле: " << int(progress * 100.0) << " %\r" << std::flush;
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        } else {
+            time_var = false;
+        }
+        
+    }
+    std::cout << std::endl;
+
+}

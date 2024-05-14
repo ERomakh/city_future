@@ -34,12 +34,14 @@ namespace preparation{
             igraph_t graph;
             v_longlong vertex_graph;
             std::unordered_map<unsigned long, OGRPoint> graph_geom_connect;
+            std::vector<OGRLineString> gen_line_vec;
             std::vector<point> graph_array_vec;
             v_doub graph_weights;
             v_doub bc_nodes;
             v_doub cc_nodes;
-            
             void create_igraph(std::unique_ptr<Roads>& topo_roads);
+            
+            void save_graph_as_shp(std::string savepath, OGRSpatialReference spatref);
             void calculate_centrality();
             void make_array();
             
@@ -74,6 +76,9 @@ namespace preparation{
     };
 
     v_doub amenity_density(std::unique_ptr<io::Osm_amenities>& amenities, std::unique_ptr<io::Osm_building>& builds);
+    std::map<std::tuple<int, int>, std::tuple<std::tuple<int, int>, std::tuple<int, int>, double>> create_generalized_graph(std::unique_ptr<Roads>& topo_roads);
+    void timer_exp(std::vector<long>& processed, ssize_t& all_things);
+
 }
 
 

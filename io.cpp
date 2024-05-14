@@ -132,10 +132,10 @@ void io::Osm_roads::download_data(std::string pathname){
     GDALAllRegister();
     std::map<std::tuple<double, double>, std::string> utm_data = io::make_utm_crs();
 
-    const char* path_to_file = pathname.data();
+    // const char* path_to_file = pathname.data();
     auto lamda_val = [](const OGRFeature::FieldValue& field_data){return std::string(field_data.GetName());};
 
-    GDALDatasetUniquePtr gdal_data(GDALDataset::Open(path_to_file, GDAL_OF_VECTOR, NULL, NULL, NULL));
+    GDALDatasetUniquePtr gdal_data(GDALDataset::Open(pathname.data(), GDAL_OF_VECTOR, NULL, NULL, NULL));
     if (gdal_data != nullptr){
         OGRLayer *line_layer;
         std::string fcl;
@@ -165,21 +165,21 @@ void io::Osm_roads::download_data(std::string pathname){
             }
             
             OGRGeometry *general_type = line_feature->GetGeometryRef();
-            if (general_type != nullptr && general_type->getGeometryType() == wkbLineString){
-                OGRLineString* linestring_geom = new OGRLineString;
-                linestring_geom = general_type->toLineString();
-                linestring_geom->transformTo(&osrs_spatref);
-                roads_length.push_back(linestring_geom->get_Length());
-                wkt_linestring.push_back(*linestring_geom);
-                delete linestring_geom;
-            } else if (general_type != nullptr && general_type->getGeometryType() == wkbMultiLineString){
-                OGRMultiLineString* multi_line = new OGRMultiLineString;
-                multi_line = general_type->toMultiLineString();
-                for (auto lstr:multi_line){
-                    wkt_linestring.push_back(*lstr);
+            if (general_type != nullptr && general_type->getGeometryType() == wkbMultiLineString){
+                OGRMultiLineString roads_mp = *general_type->toMultiLineString();
+                for (auto rmp:roads_mp){
+                    rmp->transformTo(&osrs_spatref);
+                    wkt_linestring.push_back(*rmp);
+                    roads_length.push_back(rmp->get_Length());
                 }
-                delete multi_line;
-            }
+            } else if (general_type != nullptr && general_type->getGeometryType() == wkbLineString){
+                OGRLineString roads_mp = *general_type->toLineString();
+                roads_mp.transformTo(&osrs_spatref);
+                wkt_linestring.push_back(roads_mp);
+                roads_length.push_back(roads_mp.get_Length());
+                }
+
+            
         }
     } else {
         std::cout << "Такого шейпфайла нет. Проверь путь до шейпа" << std::endl;
@@ -705,6 +705,103 @@ std::unordered_map<std::string, std::string> io::gtfs_paths(std::string exe_path
             }
         }
     }
-    
+
     return gtfs_paths;
+}
+
+
+void io::Osm_building::save_data(std::string bsavepath, OGRSpatialReference srs_d){
+
+    const char *driver_name = "ESRI Shapefile";
+    GDALDriver *gdal_driver;
+    gdal_driver = GetGDALDriverManager()->GetDriverByName(driver_name);
+    GDALDataset *dataset;
+    dataset = gdal_driver->Create(bsavepath.data(), 0, 0, 0, GDT_Unknown, NULL);
+
+    if (dataset == NULL) {
+        std::cout << "Не получилось создать шейпфайл" << std::endl;
+        GDALClose(dataset);
+        return;
+    }
+
+    OGRLayer *feature_layer;
+    feature_layer = dataset->CreateLayer("outpoint", &srs_d, wkbPolygon, NULL);
+
+    OGRFieldDefn osmid_field("osm_id", OFTInteger64);
+    OGRFieldDefn build_field("building", OFTString);
+    OGRFieldDefn buildl_field("building_l", OFTString);
+
+    feature_layer->CreateField(&osmid_field);
+    feature_layer->CreateField(&build_field);
+    feature_layer->CreateField(&buildl_field);
+
+    char* recode(int nEncoding = 0);
+    
+    for (ssize_t i = 0; i < wkt_polygon.size(); i++){
+        OGRFeature *point_feature;
+        std::string level_string = std::to_string(levels.at(i));
+        point_feature = OGRFeature::CreateFeature(feature_layer->GetLayerDefn());
+        point_feature->SetField("osm_id", osm_id_vec.at(i));
+        point_feature->SetField("building", building_type_vec.at(i).data());
+        point_feature->SetField("building_l", level_string.data());
+
+        point_feature->SetGeometry(&wkt_polygon.at(i));
+        feature_layer->CreateFeature(point_feature);
+        OGRFeature::DestroyFeature(point_feature);
+    }
+    GDALClose(dataset);
+}
+
+
+void io::Osm_roads::save_data(std::string rsavepath, OGRSpatialReference srs_d){
+
+    const char *driver_name = "ESRI Shapefile";
+    GDALDriver *gdal_driver;
+    gdal_driver = GetGDALDriverManager()->GetDriverByName(driver_name);
+    GDALDataset *dataset;
+    dataset = gdal_driver->Create(rsavepath.data(), 0, 0, 0, GDT_Unknown, NULL);
+
+    if (dataset == NULL) {
+        std::cout << "Не получилось создать шейпфайл" << std::endl;
+        GDALClose(dataset);
+        return;
+    }
+
+    OGRLayer *feature_layer;
+    feature_layer = dataset->CreateLayer("outpoint", &srs_d, wkbLineString, NULL);
+
+    OGRFieldDefn osmid_field("osm_id", OFTInteger64);
+    OGRFieldDefn fclass_field("fclass", OFTString);
+
+    feature_layer->CreateField(&osmid_field);
+    feature_layer->CreateField(&fclass_field);
+
+    char* recode(int nEncoding = 0);
+    
+    for (ssize_t i = 0; i < wkt_linestring.size(); i++){
+        OGRFeature *point_feature;
+        point_feature = OGRFeature::CreateFeature(feature_layer->GetLayerDefn());
+        point_feature->SetField("osm_id", osm_id_vec.at(i));
+        point_feature->SetField("fclass", fclass_vec.at(i).data());
+
+        point_feature->SetGeometry(&wkt_linestring.at(i));
+        feature_layer->CreateFeature(point_feature);
+        OGRFeature::DestroyFeature(point_feature);
+    }
+    GDALClose(dataset);
+}
+
+
+void io::Osm_roads::clear_roads(std::unique_ptr<Osm_roads>& clear_roads){
+
+    for (int i = 0; i < fclass_vec.size(); i++){
+        if ((fclass_vec.at(i) != std::string("pedestrian")) && (fclass_vec.at(i) != std::string("footway"))){
+            if ((fclass_vec.at(i) != std::string("cycleway")) && (fclass_vec.at(i) != std::string("path"))){
+                clear_roads->fclass_vec.push_back(fclass_vec.at(i));
+                clear_roads->osm_id_vec.push_back(osm_id_vec.at(i));
+                clear_roads->roads_length.push_back(roads_length.at(i));
+                clear_roads->wkt_linestring.push_back(wkt_linestring.at(i));
+            }
+        }
+    }
 }
